@@ -1,0 +1,12 @@
+{
+  "/api/v1/models": "/models",
+  "/api/v1/models/:model_id": "/models/:id",
+  "/api/v1/models/:model_id/settings": "/model_settings",
+  "/api/v1/models/settings/catalog": "/settings_catalog",
+  "/api/v1/models/:model_id/schemas": "/model_schemas",
+  "/api/v1/generate": "/generate",
+  "/api/v1/health": "/health",
+  "/api/v1/stack/containers": "/containers",
+  "/api/v1/stack/warnings": "/warnings",
+  "/api/v1/user/preferences/:key": "/user_preferences/:id"
+}

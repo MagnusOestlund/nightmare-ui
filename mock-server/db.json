@@ -1,0 +1,211 @@
+{
+  "health": {
+    "status": "healthy",
+    "timestamp": "2024-12-27T12:00:00Z",
+    "version": "6.2.0"
+  },
+  "status": {
+    "status": "running",
+    "services": {
+      "orchestrator": { "status": "healthy", "uptime": 3600 },
+      "ai_service": { "status": "healthy", "uptime": 3600 },
+      "vllm": { "status": "healthy", "uptime": 1800 },
+      "redis": { "status": "healthy", "uptime": 7200 },
+      "postgres": { "status": "healthy", "uptime": 7200 }
+    },
+    "resources": {
+      "vram_used_gb": 45.2,
+      "vram_total_gb": 120,
+      "cpu_usage_percent": 35,
+      "memory_usage_percent": 60
+    }
+  },
+  "services": [
+    {
+      "name": "orchestrator",
+      "status": "running",
+      "port": 8001,
+      "health_check_url": "http://localhost:8001/health",
+      "uptime": 3600
+    },
+    {
+      "name": "ai_service",
+      "status": "running",
+      "port": 8006,
+      "health_check_url": "http://localhost:8006/health",
+      "uptime": 3600
+    },
+    {
+      "name": "vllm",
+      "status": "running",
+      "port": 8000,
+      "health_check_url": "http://localhost:8000/health",
+      "uptime": 1800
+    },
+    {
+      "name": "redis",
+      "status": "running",
+      "port": 6379,
+      "health_check_url": null,
+      "uptime": 7200
+    },
+    {
+      "name": "postgres",
+      "status": "running",
+      "port": 5432,
+      "health_check_url": null,
+      "uptime": 7200
+    }
+  ],
+  "containers": [
+    {
+      "name": "nightmare-vllm-1",
+      "status": "running",
+      "image": "nightmare/vllm-custom:latest",
+      "ports": ["8000:8000"],
+      "logs": "vLLM server running on port 8000\nModel loaded: ministral-3-8B-instruct\nReady for inference"
+    },
+    {
+      "name": "nightmare-redis-1",
+      "status": "running",
+      "image": "redis:7-alpine",
+      "ports": ["6379:6379"],
+      "logs": "Redis server running on port 6379\nMemory: 256MB used / 512MB total"
+    },
+    {
+      "name": "nightmare-postgres-1",
+      "status": "running",
+      "image": "postgres:15-alpine",
+      "ports": ["5432:5432"],
+      "logs": "PostgreSQL server running on port 5432\nDatabase: nightmare\nConnections: 5/100"
+    },
+    {
+      "name": "nightmare-orchestrator-1",
+      "status": "running",
+      "image": "nightmare/orchestrator:latest",
+      "ports": ["8001:8001"],
+      "logs": "Orchestrator running on port 8001\nServices registered: 5\nJobs processed: 1234"
+    },
+    {
+      "name": "nightmare-ai_service-1",
+      "status": "running",
+      "image": "nightmare/ai_service:latest",
+      "ports": ["8006:8006"],
+      "logs": "AI Service running on port 8006\nModels available: 3\nRequests processed: 567"
+    }
+  ],
+  "warnings": [
+    {
+      "id": "warn-1",
+      "type": "redis_oom",
+      "message": "Redis memory usage at 85%",
+      "severity": "warning",
+      "timestamp": "2024-12-27T11:45:00Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "ministral-3-8b-instruct",
+      "model_family": "ministral-3-8b-instruct",
+      "model_name": "Mistral 3 8B Instruct",
+      "status": "active",
+      "capabilities": ["text-generation", "tool-calling"],
+      "vram_gb": 8.5,
+      "context_length": 32768,
+      "quantization": "awq-4bit"
+    },
+    {
+      "id": "qwen-2.5-7b-instruct",
+      "model_family": "qwen-2.5-7b-instruct",
+      "model_name": "Qwen 2.5 7B Instruct",
+      "status": "active",
+      "capabilities": ["text-generation", "tool-calling", "multilingual"],
+      "vram_gb": 7.2,
+      "context_length": 32768,
+      "quantization": "awq-4bit"
+    },
+    {
+      "id": "llama-3.2-11b-vision",
+      "model_family": "llama-3.2-11b-vision",
+      "model_name": "Llama 3.2 11B Vision",
+      "status": "active",
+      "capabilities": ["text-generation", "vision", "image-analysis"],
+      "vram_gb": 12.5,
+      "context_length": 128000,
+      "quantization": "awq-4bit"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "wf-1",
+      "name": "Invoice Processing",
+      "description": "Extract data from PDF invoices",
+      "nodes": [
+        { "id": "n1", "type": "upload", "position": { "x": 100, "y": 100 } },
+        { "id": "n2", "type": "model", "position": { "x": 300, "y": 100 } },
+        { "id": "n3", "type": "output", "position": { "x": 500, "y": 100 } }
+      ],
+      "edges": [
+        { "id": "e1", "source": "n1", "target": "n2" },
+        { "id": "e2", "source": "n2", "target": "n3" }
+      ],
+      "created_at": "2024-12-27T10:00:00Z",
+      "updated_at": "2024-12-27T11:00:00Z"
+    }
+  ],
+  "jobs": [
+    {
+      "item_id": "job-1",
+      "status": "SUCCESS",
+      "type": "ai_request",
+      "created_at": "2024-12-27T11:00:00Z",
+      "completed_at": "2024-12-27T11:00:05Z",
+      "result": {
+        "text": "This is a mock response from the AI service.",
+        "model": "ministral-3-8b-instruct",
+        "tokens": 42
+      }
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-1",
+      "name": "Invoice Automator",
+      "description": "Automated invoice processing workflow",
+      "created_at": "2024-12-27T09:00:00Z",
+      "updated_at": "2024-12-27T11:00:00Z",
+      "workflow_count": 1
+    }
+  ],
+  "chat_messages": [
+    {
+      "id": "msg-1",
+      "project_id": "proj-1",
+      "role": "user",
+      "content": "Hello, can you help me process invoices?",
+      "timestamp": "2024-12-27T10:00:00Z"
+    },
+    {
+      "id": "msg-2",
+      "project_id": "proj-1",
+      "role": "assistant",
+      "content": "I can help you set up an invoice processing workflow. Let me create a workflow with an upload node, a model node for extraction, and an output node.",
+      "timestamp": "2024-12-27T10:00:01Z"
+    }
+  ],
+  "user_preferences": [
+    {
+      "id": "default:node-palette",
+      "categoryOrder": ["models", "data", "transform", "control", "analytics", "utility"],
+      "categoryStates": {
+        "models": { "expanded": true, "order": 0 },
+        "data": { "expanded": true, "order": 1 },
+        "transform": { "expanded": true, "order": 2 },
+        "control": { "expanded": true, "order": 3 },
+        "analytics": { "expanded": true, "order": 4 },
+        "utility": { "expanded": true, "order": 5 }
+      }
+    }
+  ]
+}
+
