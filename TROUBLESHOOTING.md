@@ -53,3 +53,4 @@ If simple canvas also shows black:
 - Check for CSS issues
 - Check for JavaScript errors in console
 
+

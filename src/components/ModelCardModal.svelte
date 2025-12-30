@@ -22,14 +22,22 @@
 
   // Key for forcing re-render when show changes
   let modalKey = $state<number>(0);
+  let prevShow = $state<boolean>(false);
+  let prevModelId = $state<string | null>(null);
 
   // Track show and modelId prop changes with $effect
   $effect(() => {
-    console.log('ModelCardModal: show prop changed to:', show, 'modelId:', modelId);
-    // Update key to force re-render
-    if (show && modelId) {
+    // Only update key if show or modelId actually changed
+    if ((show !== prevShow || modelId !== prevModelId) && show && modelId) {
       modalKey++;
-      console.log('ModelCardModal: modalKey updated to:', modalKey);
+      prevShow = show;
+      prevModelId = modelId;
+      if (import.meta.env.DEV) {
+        console.log('ModelCardModal: modalKey updated to:', modalKey, 'modelId:', modelId);
+      }
+    } else if (!show) {
+      prevShow = false;
+      prevModelId = null;
     }
   });
 

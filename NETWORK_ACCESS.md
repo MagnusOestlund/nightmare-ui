@@ -66,3 +66,4 @@ Your server IP is: **192.168.1.199** ✅
 Once npm is installed and the server is started, you should be able to access:
 - **http://192.168.1.199:5173**
 
+

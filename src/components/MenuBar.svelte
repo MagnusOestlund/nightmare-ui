@@ -12,13 +12,17 @@
     onRestart = null,
     onSave = null,
     onQuit = null,
-    onOpenSettings = null
+    onOpenSettings = null,
+    activeTab = 'canvas',
+    onTabChange = null
   }: {
     onTogglePalette?: (() => void) | null;
     onRestart?: (() => void) | null;
     onSave?: (() => void) | null;
     onQuit?: (() => void) | null;
     onOpenSettings?: (() => void) | null;
+    activeTab?: 'projects' | 'canvas';
+    onTabChange?: ((tab: 'projects' | 'canvas') => void) | null;
   } = $props();
 
   function handleRestart() {
@@ -48,6 +52,12 @@
   function handleSettings() {
     if (onOpenSettings) {
       onOpenSettings();
+    }
+  }
+
+  function handleTabClick(tab: 'projects' | 'canvas') {
+    if (onTabChange) {
+      onTabChange(tab);
     }
   }
 </script>
@@ -118,17 +128,71 @@
     </span>
   </div>
 
-  <!-- Center: Canvas Tab -->
+  <!-- Center: Tabs (Projects, Canvas, Code Editor, Advanced Analytics) -->
   <div style="
-    padding: 8px 20px;
-    background: #25252a;
-    border: 1px solid #333;
-    border-radius: 4px;
-    color: white;
-    font-size: 14px;
+    display: flex;
+    gap: 8px;
     margin-right: auto;
+    align-items: center;
   ">
-    Canvas
+    <!-- Projects Tab -->
+    <button
+      onclick={() => handleTabClick('projects')}
+      style="
+        padding: 8px 20px;
+        background: {activeTab === 'projects' ? '#007bff' : '#25252a'};
+        border: 1px solid {activeTab === 'projects' ? '#007bff' : '#333'};
+        border-radius: 4px;
+        color: white;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.2s;
+      "
+      onmouseenter={(e) => {
+        if (activeTab !== 'projects') {
+          e.currentTarget.style.background = '#2a2a2f';
+          e.currentTarget.style.borderColor = '#444';
+        }
+      }}
+      onmouseleave={(e) => {
+        if (activeTab !== 'projects') {
+          e.currentTarget.style.background = '#25252a';
+          e.currentTarget.style.borderColor = '#333';
+        }
+      }}
+    >
+      Projects
+    </button>
+
+    <!-- Canvas Tab -->
+    <button
+      onclick={() => handleTabClick('canvas')}
+      style="
+        padding: 8px 20px;
+        background: {activeTab === 'canvas' ? '#007bff' : '#25252a'};
+        border: 1px solid {activeTab === 'canvas' ? '#007bff' : '#333'};
+        border-radius: 4px;
+        color: white;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.2s;
+      "
+      onmouseenter={(e) => {
+        if (activeTab !== 'canvas') {
+          e.currentTarget.style.background = '#2a2a2f';
+          e.currentTarget.style.borderColor = '#444';
+        }
+      }}
+      onmouseleave={(e) => {
+        if (activeTab !== 'canvas') {
+          e.currentTarget.style.background = '#25252a';
+          e.currentTarget.style.borderColor = '#333';
+        }
+      }}
+    >
+      Canvas
+    </button>
+
   </div>
 
   <!-- Right: Settings and Power -->

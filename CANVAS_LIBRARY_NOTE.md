@@ -34,3 +34,4 @@ When ready to add full canvas functionality:
 ✅ Drag-and-drop from palette functional
 ⏳ Full canvas features pending Svelte 5 upgrade
 
+

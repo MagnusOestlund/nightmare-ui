@@ -12,11 +12,13 @@
   let { 
     show = false,
     onClose = null,
-    onClearChat = null
+    onClearChat = null,
+    showMinimap = $bindable(true)
   }: {
     show?: boolean;
     onClose?: (() => void) | null;
     onClearChat?: (() => void) | null;
+    showMinimap?: boolean;
   } = $props();
 
   let theme = $state<'dark' | 'light'>('dark');
@@ -146,6 +148,30 @@
             <div style="margin-top: 5px; color: #666;">Logs will appear here when available</div>
           </div>
         {/if}
+      </div>
+
+      <!-- Canvas Settings -->
+      <div style="margin-bottom: 30px;">
+        <h3 style="margin: 0 0 10px 0; color: white; font-size: 14px;">Canvas</h3>
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #25252a; border: 1px solid #333; border-radius: 4px;">
+          <span style="color: white; font-size: 14px;">Show Minimap</span>
+          <button
+            onclick={() => {
+              showMinimap = !showMinimap;
+            }}
+            style="
+              padding: 6px 12px;
+              background: {showMinimap ? '#007bff' : '#555'};
+              color: white;
+              border: 1px solid {showMinimap ? '#007bff' : '#666'};
+              border-radius: 4px;
+              cursor: pointer;
+              font-size: 12px;
+            "
+          >
+            {showMinimap ? 'Hide' : 'Show'}
+          </button>
+        </div>
       </div>
 
       <!-- Clear Chat -->

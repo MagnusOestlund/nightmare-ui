@@ -14,9 +14,11 @@
   import ModelCardModal from './components/ModelCardModal.svelte';
   import AddModelModal from './components/AddModelModal.svelte';
   // Use simple canvas for now (full @xyflow/svelte canvas will be added later)
-  import WorkflowCanvas from './components/WorkflowCanvas.simple.svelte';
-  // import WorkflowCanvas from './components/WorkflowCanvas.svelte';
+  // import WorkflowCanvas from './components/WorkflowCanvas.simple.svelte';
+  import WorkflowCanvas from './components/WorkflowCanvas.svelte';
   import NodePalette from './components/NodePalette.svelte';
+  import ProjectsTab from './components/ProjectsTab.svelte';
+  import ProjectsSidebar from './components/ProjectsSidebar.svelte';
 
   // API base URL - points to mock server during development
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
@@ -32,8 +34,17 @@
   let selectedModelCardId = $state<string | null>(null);
   let showAddModelModal = $state<boolean>(false);
   let showNodePalette = $state<boolean>(true);
+  let isNodePaletteCollapsed = $state<boolean>(false); // Collapsed state for Node Palette
   let showSettingsPanel = $state<boolean>(false);
   let clearChatTrigger = $state<number>(0);
+  let activeTab = $state<'projects' | 'canvas'>('canvas');
+  let selectedProjectId = $state<string | null>(null);
+  let isChatCollapsed = $state<boolean>(false); // Collapsed state for Chat Panel
+  let chatHeight = $state<number>(20); // Chat panel height percentage (default 20%)
+  let sidebarWidth = $state<number>(250); // Sidebar width in pixels (default 250px, matches Projects sidebar)
+  let isResizingChat = $state<boolean>(false);
+  let isResizingSidebar = $state<boolean>(false);
+  let showMinimap = $state<boolean>(true); // Show minimap/overview (default: true)
   
   function openModelBrowser() {
     console.log('App.openModelBrowser called, current state:', showModelBrowserModal);
@@ -95,6 +106,10 @@
   function handleSave() {
     // TODO: Implement save functionality
     alert('Save functionality will be implemented soon!');
+  }
+
+  function handleTabChange(tab: 'projects' | 'canvas') {
+    activeTab = tab;
   }
 
   function handleQuit() {
@@ -227,6 +242,8 @@
     onSave={handleSave}
     onQuit={handleQuit}
     onOpenSettings={handleOpenSettings}
+    {activeTab}
+    onTabChange={handleTabChange}
   />
 
   <!-- Settings Panel (slide-in from right) -->
@@ -234,30 +251,297 @@
     show={showSettingsPanel}
     onClose={handleOpenSettings}
     onClearChat={handleClearChat}
+    bind:showMinimap={showMinimap}
   />
 
   <!-- Main Content Area -->
   <div style="flex: 1; display: flex; overflow: hidden;">
-    <!-- Node Palette (Phase 2) - Toggleable -->
-    {#if showNodePalette}
-      <NodePalette onBrowseModels={() => {
-        console.log('App: onBrowseModels callback called from NodePalette');
-        openModelBrowser();
-      }} />
+    <!-- Sidebar: Different for each tab -->
+    {#if activeTab === 'projects'}
+      <!-- Projects Sidebar -->
+      <div style="position: relative; width: {sidebarWidth}px; flex-shrink: 0; display: flex;">
+        <ProjectsSidebar 
+          onProjectSelect={(id) => { selectedProjectId = id; }}
+        />
+        <!-- Resize handle -->
+        <div
+          style="
+            width: 4px;
+            background: transparent;
+            cursor: col-resize;
+            flex-shrink: 0;
+            transition: background 0.2s;
+          "
+          onmouseenter={(e) => e.currentTarget.style.background = '#007bff'}
+          onmouseleave={(e) => {
+            if (!isResizingSidebar) {
+              e.currentTarget.style.background = 'transparent';
+            }
+          }}
+          onmousedown={(e) => {
+            isResizingSidebar = true;
+            e.preventDefault();
+            const startX = e.clientX;
+            const startWidth = sidebarWidth;
+            
+            function handleMouseMove(moveEvent: MouseEvent) {
+              const diff = moveEvent.clientX - startX;
+              const newWidth = Math.max(200, Math.min(800, startWidth + diff));
+              sidebarWidth = newWidth;
+            }
+            
+            function handleMouseUp() {
+              isResizingSidebar = false;
+              document.removeEventListener('mousemove', handleMouseMove);
+              document.removeEventListener('mouseup', handleMouseUp);
+            }
+            
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+          }}
+        />
+      </div>
+    {:else if activeTab === 'canvas'}
+      <!-- Node Palette (only for Canvas tab) -->
+      {#if showNodePalette}
+        {#if isNodePaletteCollapsed}
+          <!-- Collapsed: Just a thin vertical bar on the left -->
+          <button
+            type="button"
+            style="
+              width: 40px;
+              background: #1a1a1f;
+              border: none;
+              border-right: 1px solid #333;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              padding: 10px 0;
+              cursor: pointer;
+              transition: all 0.2s;
+            "
+            onclick={() => isNodePaletteCollapsed = false}
+            onmouseenter={(e) => e.currentTarget.style.background = '#25252a'}
+            onmouseleave={(e) => e.currentTarget.style.background = '#1a1a1f'}
+            title="Expand Node Palette"
+            aria-label="Expand Node Palette"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: #888; transform: rotate(-90deg);">
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+        {:else}
+          <div style="position: relative; width: {sidebarWidth}px; flex-shrink: 0; display: flex; height: 100%;">
+            <NodePalette onBrowseModels={() => {
+              console.log('App: onBrowseModels callback called from NodePalette');
+              openModelBrowser();
+            }} />
+            <!-- Resize handle -->
+            <div
+              style="
+                width: 4px;
+                background: transparent;
+                cursor: col-resize;
+                flex-shrink: 0;
+                transition: background 0.2s;
+              "
+              onmouseenter={(e) => e.currentTarget.style.background = '#007bff'}
+              onmouseleave={(e) => {
+                if (!isResizingSidebar) {
+                  e.currentTarget.style.background = 'transparent';
+                }
+              }}
+              onmousedown={(e) => {
+                isResizingSidebar = true;
+                e.preventDefault();
+                const startX = e.clientX;
+                const startWidth = sidebarWidth;
+                
+                function handleMouseMove(moveEvent: MouseEvent) {
+                  const diff = moveEvent.clientX - startX;
+                  const newWidth = Math.max(200, Math.min(800, startWidth + diff));
+                  sidebarWidth = newWidth;
+                }
+                
+                function handleMouseUp() {
+                  isResizingSidebar = false;
+                  document.removeEventListener('mousemove', handleMouseMove);
+                  document.removeEventListener('mouseup', handleMouseUp);
+                }
+                
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+              }}
+            />
+            <!-- Collapse button -->
+            <button
+              onclick={() => isNodePaletteCollapsed = true}
+              style="
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                width: 24px;
+                height: 24px;
+                background: rgba(26, 26, 31, 0.9);
+                border: 1px solid #333;
+                border-radius: 4px;
+                color: #888;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10;
+                transition: all 0.2s;
+              "
+              onmouseenter={(e) => {
+                e.currentTarget.style.background = 'rgba(37, 37, 42, 0.95)';
+                e.currentTarget.style.borderColor = '#007bff';
+                e.currentTarget.style.color = 'white';
+              }}
+              onmouseleave={(e) => {
+                e.currentTarget.style.background = 'rgba(26, 26, 31, 0.9)';
+                e.currentTarget.style.borderColor = '#333';
+                e.currentTarget.style.color = '#888';
+              }}
+              title="Collapse Node Palette"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l-6-6 6-6"></path>
+              </svg>
+            </button>
+          </div>
+        {/if}
+      {/if}
     {/if}
     
     <!-- Main Content -->
     <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-      <!-- Canvas Area (80% height) -->
-      <div style="flex: 1; min-height: 0; overflow: hidden;">
-        <WorkflowCanvas />
-      </div>
-      
-      <!-- Chat Panel at Bottom (20% height) -->
-      <ChatPanel 
-        onModelSelect={(id) => { selectedModelId = id; }}
-        clearMessagesTrigger={clearChatTrigger}
-      />
+      {#if activeTab === 'projects'}
+        <!-- Projects Tab -->
+        <div style="flex: 1; min-height: 0; overflow: hidden;">
+          <ProjectsTab {selectedProjectId} />
+        </div>
+      {:else if activeTab === 'canvas'}
+        <!-- Canvas Area -->
+        <div style="flex: {100 - chatHeight}; min-height: 0; overflow: hidden;">
+          <WorkflowCanvas bind:showMinimap={showMinimap} />
+        </div>
+        
+        <!-- Chat Panel at Bottom -->
+        {#if isChatCollapsed}
+          <!-- Collapsed: Just a thin horizontal bar at the bottom -->
+          <button
+            type="button"
+            style="
+              height: 40px;
+              width: 100%;
+              background: #1a1a1f;
+              border: none;
+              border-top: 1px solid #333;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+              transition: all 0.2s;
+              flex-shrink: 0;
+            "
+            onclick={() => isChatCollapsed = false}
+            onmouseenter={(e) => e.currentTarget.style.background = '#25252a'}
+            onmouseleave={(e) => e.currentTarget.style.background = '#1a1a1f'}
+            title="Expand Chat"
+            aria-label="Expand Chat"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: #888; transform: rotate(180deg);">
+              <path d="M6 9l6 6 6-6"></path>
+            </svg>
+          </button>
+        {:else}
+          <div style="position: relative; height: {chatHeight}%; min-height: 200px; max-height: 600px; flex-shrink: 0; display: flex; flex-direction: column;">
+            <!-- Resize handle -->
+            <div
+              style="
+                height: 4px;
+                width: 100%;
+                background: transparent;
+                cursor: row-resize;
+                flex-shrink: 0;
+                transition: background 0.2s;
+              "
+              onmouseenter={(e) => e.currentTarget.style.background = '#007bff'}
+              onmouseleave={(e) => {
+                if (!isResizingChat) {
+                  e.currentTarget.style.background = 'transparent';
+                }
+              }}
+              onmousedown={(e) => {
+                isResizingChat = true;
+                e.preventDefault();
+                const startY = e.clientY;
+                const containerHeight = (e.currentTarget.parentElement?.parentElement as HTMLElement)?.offsetHeight || 1000;
+                const startHeight = chatHeight;
+                
+                function handleMouseMove(moveEvent: MouseEvent) {
+                  const diff = moveEvent.clientY - startY;
+                  const heightDiff = (diff / containerHeight) * 100;
+                  const newHeight = Math.max(10, Math.min(60, startHeight - heightDiff));
+                  chatHeight = newHeight;
+                }
+                
+                function handleMouseUp() {
+                  isResizingChat = false;
+                  document.removeEventListener('mousemove', handleMouseMove);
+                  document.removeEventListener('mouseup', handleMouseUp);
+                }
+                
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+              }}
+            />
+            <div style="flex: 1; min-height: 0; overflow: hidden;">
+              <ChatPanel 
+                onModelSelect={(id) => { selectedModelId = id; }}
+                clearMessagesTrigger={clearChatTrigger}
+              />
+            </div>
+            <!-- Collapse button -->
+            <button
+              onclick={() => isChatCollapsed = true}
+              style="
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                width: 24px;
+                height: 24px;
+                background: rgba(26, 26, 31, 0.9);
+                border: 1px solid #333;
+                border-radius: 4px;
+                color: #888;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10;
+                transition: all 0.2s;
+              "
+              onmouseenter={(e) => {
+                e.currentTarget.style.background = 'rgba(37, 37, 42, 0.95)';
+                e.currentTarget.style.borderColor = '#007bff';
+                e.currentTarget.style.color = 'white';
+              }}
+              onmouseleave={(e) => {
+                e.currentTarget.style.background = 'rgba(26, 26, 31, 0.9)';
+                e.currentTarget.style.borderColor = '#333';
+                e.currentTarget.style.color = '#888';
+              }}
+              title="Collapse Chat"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 9l6 6 6-6"></path>
+              </svg>
+            </button>
+          </div>
+        {/if}
+      {/if}
     </div>
   </div>
 </div>

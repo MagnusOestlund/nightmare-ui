@@ -55,3 +55,4 @@ The canvas uses `@xyflow/svelte` for the workflow builder. If this package doesn
 - Event handlers may need adjustment based on actual library API
 - Node types configuration needs implementation
 
+
