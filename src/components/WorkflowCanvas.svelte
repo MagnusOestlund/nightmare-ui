@@ -57,6 +57,25 @@
   let viewport = $state({ x: 0, y: 0, zoom: 1 }); // Track viewport state
   let zoomLevel = $state<number>(1); // Current zoom level (1 = 100%)
   let viewportProp = $state({ x: 0, y: 0, zoom: 1 }); // Viewport prop for SvelteFlow
+  
+  // Execution state
+  let isExecuting = $state(false);
+  let executionRunId: string | null = $state(null);
+  let nodeExecutionStatus: Map<string, 'pending' | 'running' | 'completed' | 'failed'> = $state(new Map());
+  let executionTrace: Array<{
+    timestamp: string;
+    nodeId: string;
+    status: string;
+    tokens?: number;
+    latency?: number;
+    error?: string;
+  }> = $state([]);
+  let showExecutionTrace = $state(false);
+  
+  // Node dragging state
+  let draggedNodeId: string | null = $state(null);
+  let hoveredEdgeId: string | null = $state(null);
+  let invalidConnectionSource: string | null = $state(null); // Track invalid connection attempts
 
   // Props
   let { showMinimap = $bindable(true) }: { showMinimap?: boolean } = $props();
@@ -147,17 +166,25 @@
           svelteFlowInstance.setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 300 });
           zoomLevel = 1;
           viewport = { x: 0, y: 0, zoom: 1 };
+          viewportProp = { x: 0, y: 0, zoom: 1 }; // Update viewportProp to sync with SvelteFlow
         } else {
           // Last resort: update viewport state directly
           zoomLevel = 1;
           viewport = { x: 0, y: 0, zoom: 1 };
+          viewportProp = { x: 0, y: 0, zoom: 1 }; // Update viewportProp to sync with SvelteFlow
         }
       } catch (e) {
         console.warn('WorkflowCanvas: Error resetting zoom:', e);
         // Fallback: update viewport state
         zoomLevel = 1;
         viewport = { x: 0, y: 0, zoom: 1 };
+        viewportProp = { x: 0, y: 0, zoom: 1 }; // Update viewportProp to sync with SvelteFlow
       }
+    } else {
+      // If no instance, just update state
+      zoomLevel = 1;
+      viewport = { x: 0, y: 0, zoom: 1 };
+      viewportProp = { x: 0, y: 0, zoom: 1 };
     }
   }
 
@@ -343,9 +370,107 @@
     }));
   }
 
-  // Run workflow (simulate execution path)
+  // Convert nodes and edges to workflow definition format
+  function convertToWorkflowDefinition(): any {
+    // Build node map for quick lookup
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    
+    // Convert nodes to workflow steps
+    const steps: any[] = [];
+    const nodeIdToStepIndex = new Map<string, number>();
+    
+    // Find start node
+    const startNode = nodes.find(n => n.data?.nodeType === 'start');
+    if (!startNode) {
+      throw new Error('No Start node found');
+    }
+    
+    // Build execution order using BFS from start node
+    const executionOrder: string[] = [];
+    const visited = new Set<string>();
+    const queue = [startNode.id];
+    visited.add(startNode.id);
+    
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      executionOrder.push(currentId);
+      
+      const outgoingEdges = edges.filter(e => e.source === currentId);
+      for (const edge of outgoingEdges) {
+        if (!visited.has(edge.target)) {
+          visited.add(edge.target);
+          queue.push(edge.target);
+        }
+      }
+    }
+    
+    // Convert each node to a step
+    for (const nodeId of executionOrder) {
+      const node = nodeMap.get(nodeId);
+      if (!node) continue;
+      
+      const stepIndex = steps.length;
+      nodeIdToStepIndex.set(nodeId, stepIndex);
+      
+      // Get inputs from incoming edges
+      const inputs: any = {};
+      const incomingEdges = edges.filter(e => e.target === nodeId);
+      for (const edge of incomingEdges) {
+        const sourceNode = nodeMap.get(edge.source);
+        if (sourceNode) {
+          // Use node output as input (simplified - in real implementation, map specific outputs)
+          inputs[`from_${edge.source}`] = {
+            node_id: edge.source,
+            output_key: 'payload', // Default output key
+          };
+        }
+      }
+      
+      // Build step based on node type
+      const nodeType = node.data?.nodeType || node.type;
+      let step: any = {
+        type: nodeType,
+        name: node.data?.label || nodeId,
+        node_id: nodeId,
+        inputs: inputs,
+      };
+      
+      // Add node-specific configuration
+      if (node.data?.config) {
+        step.params = node.data.config;
+      }
+      
+      steps.push(step);
+    }
+    
+    return {
+      id: `workflow-${Date.now()}`,
+      name: 'Canvas Workflow',
+      steps: steps,
+      graph: {
+        nodes: nodes.map(n => ({
+          id: n.id,
+          type: n.data?.nodeType || n.type,
+          position: n.position,
+          data: n.data,
+        })),
+        edges: edges.map(e => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle,
+          targetHandle: e.targetHandle,
+        })),
+      },
+    };
+  }
+
+  // Run workflow (execute via API)
   async function runWorkflow() {
-    if (nodes.length === 0) return;
+    if (nodes.length === 0) {
+      alert('Please add nodes to the workflow');
+      return;
+    }
     
     // Find start node
     const startNode = nodes.find(n => n.data?.nodeType === 'start');
@@ -354,32 +479,259 @@
       return;
     }
     
-    // Simulate execution path (in real implementation, this would come from backend)
-    // For now, just highlight nodes in order
-    executionPath = [startNode.id];
+    if (isExecuting) {
+      alert('Workflow is already executing. Please wait for it to complete.');
+      return;
+    }
     
-    // Simple BFS to find execution path
-    const visited = new Set<string>();
-    const queue = [startNode.id];
-    visited.add(startNode.id);
+    isExecuting = true;
+    error = null;
+    executionTrace = [];
+    nodeExecutionStatus.clear();
     
-    while (queue.length > 0) {
-      const currentId = queue.shift()!;
-      const outgoingEdges = edges.filter(e => e.source === currentId);
+    // Initialize all nodes as pending
+    for (const node of nodes) {
+      nodeExecutionStatus.set(node.id, 'pending');
+    }
+    
+    try {
+      // Convert workflow to definition format
+      const workflowDef = convertToWorkflowDefinition();
       
-      for (const edge of outgoingEdges) {
-        if (!visited.has(edge.target)) {
-          visited.add(edge.target);
-          queue.push(edge.target);
-          executionPath.push(edge.target);
+      // Call API endpoint (try /api/v1/run first, fallback to /api/v1/workflows/run)
+      const requestBody = {
+        workflow_id: workflowDef.id,
+        inputs: {}, // Initial inputs (can be extended later)
+        options: {
+          sync: false, // Use async mode for better UX
+          retry: 2,
+          cache: true,
+        },
+      };
+      
+      let response: Response;
+      let runId: string;
+      
+      // Try /api/v1/run (Flow Specification endpoint)
+      try {
+        response = await fetch(`${API_BASE}/api/v1/run`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ...requestBody,
+            steps: workflowDef.steps, // Include inline workflow definition
+          }),
+        });
+        
+        if (response.ok || response.status === 202) {
+          const data = await response.json();
+          runId = data.run_id || data.item_id || `run-${Date.now()}`;
+          executionRunId = runId;
+          
+          // If async, start polling
+          if (response.status === 202 || data.status === 'running') {
+            pollExecutionStatus(runId);
+          } else if (data.status === 'completed') {
+            // Sync execution completed immediately
+            handleExecutionComplete(data.result);
+          }
+        } else {
+          throw new Error(`API returned ${response.status}: ${response.statusText}`);
         }
+      } catch (apiError: any) {
+        // Fallback to /api/v1/workflows/run (existing endpoint)
+        console.warn('Failed to use /api/v1/run, trying /api/v1/workflows/run:', apiError);
+        
+        response = await fetch(`${API_BASE}/api/v1/workflows/run`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            workflow_id: workflowDef.id,
+            workflow_name: workflowDef.name,
+            steps: workflowDef.steps,
+            context: requestBody.inputs,
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to start workflow: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        runId = data.item_id || `run-${Date.now()}`;
+        executionRunId = runId;
+        
+        // Poll for status
+        pollJobStatus(runId);
+      }
+      
+      showExecutionTrace = true;
+    } catch (err: any) {
+      error = err.message;
+      isExecuting = false;
+      alert(`Error starting workflow: ${err.message}`);
+    }
+  }
+
+  // Poll execution status (for /api/v1/run endpoint)
+  async function pollExecutionStatus(runId: string) {
+    const maxAttempts = 300; // 5 minutes max (1 second intervals)
+    let attempts = 0;
+    
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        error = 'Execution timeout - workflow took too long';
+        isExecuting = false;
+        return;
+      }
+      
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/results/${runId}`);
+        
+        if (response.status === 202) {
+          // Still running, continue polling
+          attempts++;
+          setTimeout(poll, 1000); // Poll every second
+          return;
+        }
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === 'completed') {
+            handleExecutionComplete(data.result);
+          } else if (data.status === 'failed') {
+            handleExecutionFailed(data.error || 'Workflow execution failed');
+          } else {
+            // Update node statuses from trace
+            updateNodeStatusesFromTrace(data.trace || []);
+            attempts++;
+            setTimeout(poll, 1000);
+          }
+        } else {
+          throw new Error(`Failed to get execution status: ${response.statusText}`);
+        }
+      } catch (err: any) {
+        error = err.message;
+        isExecuting = false;
+        console.error('Error polling execution status:', err);
+      }
+    };
+    
+    poll();
+  }
+
+  // Poll job status (for /api/v1/jobs/{id} endpoint - fallback)
+  async function pollJobStatus(jobId: string) {
+    const maxAttempts = 300;
+    let attempts = 0;
+    
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        error = 'Execution timeout';
+        isExecuting = false;
+        return;
+      }
+      
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/jobs/${jobId}`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to get job status: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.status === 'SUCCESS') {
+          // Get result
+          const resultResponse = await fetch(`${API_BASE}/api/v1/jobs/${jobId}/result`);
+          if (resultResponse.ok) {
+            const result = await resultResponse.json();
+            handleExecutionComplete(result);
+          }
+        } else if (data.status === 'FAILURE') {
+          handleExecutionFailed(data.error || 'Workflow execution failed');
+        } else {
+          // Still running (PENDING, STARTED)
+          attempts++;
+          setTimeout(poll, 1000);
+        }
+      } catch (err: any) {
+        error = err.message;
+        isExecuting = false;
+        console.error('Error polling job status:', err);
+      }
+    };
+    
+    poll();
+  }
+
+  // Update node statuses from execution trace
+  function updateNodeStatusesFromTrace(trace: any[]) {
+    for (const entry of trace) {
+      if (entry.node_id) {
+        nodeExecutionStatus.set(entry.node_id, entry.status || 'running');
+        executionTrace.push({
+          timestamp: entry.timestamp || new Date().toISOString(),
+          nodeId: entry.node_id,
+          status: entry.status || 'running',
+          tokens: entry.tokens_used,
+          latency: entry.latency_ms,
+        });
+      }
+    }
+  }
+
+  // Handle execution completion
+  function handleExecutionComplete(result: any) {
+    isExecuting = false;
+    
+    // Mark all nodes as completed
+    for (const nodeId of nodeExecutionStatus.keys()) {
+      nodeExecutionStatus.set(nodeId, 'completed');
+    }
+    
+    // Add final trace entry
+    executionTrace.push({
+      timestamp: new Date().toISOString(),
+      nodeId: 'workflow',
+      status: 'completed',
+    });
+    
+    console.log('Workflow execution completed:', result);
+    
+    // Clear execution status after 5 seconds
+    setTimeout(() => {
+      nodeExecutionStatus.clear();
+      executionPath = [];
+    }, 5000);
+  }
+
+  // Handle execution failure
+  function handleExecutionFailed(errorMessage: string) {
+    isExecuting = false;
+    error = errorMessage;
+    
+    // Mark nodes as failed (find the failed node if possible)
+    // For now, mark all as failed
+    for (const nodeId of nodeExecutionStatus.keys()) {
+      const currentStatus = nodeExecutionStatus.get(nodeId);
+      if (currentStatus === 'running') {
+        nodeExecutionStatus.set(nodeId, 'failed');
       }
     }
     
-    // Clear execution path after 3 seconds
-    setTimeout(() => {
-      executionPath = [];
-    }, 3000);
+    executionTrace.push({
+      timestamp: new Date().toISOString(),
+      nodeId: 'workflow',
+      status: 'failed',
+      error: errorMessage,
+    });
+    
+    alert(`Workflow execution failed: ${errorMessage}`);
   }
 
   // Initialize Start node (always present)
@@ -452,10 +804,15 @@
     default: CustomNode,
   };
 
-  // Edge types configuration
+  // Edge types configuration - use straight edges for vertical connections
+  // Vertical flow: connections go straight down (Top to Bottom)
   const edgeTypes = {
-    // Default edge type
-    default: 'default',
+    default: {
+      type: 'straight', // Straight vertical connections
+    },
+    straight: {
+      type: 'straight', // Straight vertical connections
+    },
   };
 
   // Handle node drop from palette
@@ -646,67 +1003,217 @@
 
   // Handle node changes (from @xyflow/svelte)
   function onNodesChange(changes: any) {
-    // Apply automatic grid snapping when nodes are moved
+    saveHistory();
+    
+    // Apply changes to nodes array
     let nodesUpdated = false;
+    let newNodes = [...nodes];
+    
     for (const change of changes) {
       if (change.type === 'position' && change.position) {
-        const node = nodes.find(n => n.id === change.id);
-        if (node) {
-          // Snap to row-based grid
+        const nodeIndex = newNodes.findIndex(n => n.id === change.id);
+        if (nodeIndex !== -1) {
+          // Snap to grid when dragging ends (not during drag for smooth movement)
+          // Only snap if the drag has ended (SvelteFlow sends 'position' during drag and on end)
           const snappedPos = snapToGrid(change.position);
           
-          // Check if this position would overlap with other nodes in the same row
-          const targetRow = Math.round(snappedPos.y / ROW_HEIGHT);
-          const nodesInRow = nodes.filter(n => {
-            if (n.id === change.id) return false; // Exclude current node
-            const nRow = Math.round(n.position.y / ROW_HEIGHT);
-            return nRow === targetRow;
-          });
-          
-          // If there's overlap, try to place it after the rightmost node in that row
-          let finalX = snappedPos.x;
-          if (nodesInRow.length > 0) {
-            const rightmostX = Math.max(...nodesInRow.map(n => n.position.x + NODE_WIDTH));
-            if (snappedPos.x <= rightmostX + 50) { // 50px minimum spacing
-              finalX = Math.round((rightmostX + HORIZONTAL_SPACING) / GRID_SIZE) * GRID_SIZE;
-            }
-          }
-          
-          const finalPosition = {
-            x: finalX,
-            y: snappedPos.y,
+          // Update node position
+          newNodes[nodeIndex] = {
+            ...newNodes[nodeIndex],
+            position: snappedPos,
           };
-          
-          // Only update if position actually changed (avoid infinite loops)
-          if (node.position.x !== finalPosition.x || node.position.y !== finalPosition.y) {
-            node.position = finalPosition;
-            nodesUpdated = true;
-          }
+          nodesUpdated = true;
+        }
+      } else if (change.type === 'select') {
+        selectedNodeId = change.selected ? change.id : null;
+      } else if (change.type === 'remove') {
+        newNodes = newNodes.filter(n => n.id !== change.id);
+        nodesUpdated = true;
+      } else if (change.type === 'add') {
+        // New node added (shouldn't happen often, but handle it)
+        if (change.item) {
+          newNodes.push(change.item);
+          nodesUpdated = true;
         }
       }
-      if (change.type === 'select') {
-        selectedNodeId = change.selected ? change.id : null;
-      }
     }
-    // Trigger reactivity if nodes were updated
+    
+    // Update nodes state if changed
     if (nodesUpdated) {
-      nodes = [...nodes];
+      nodes = newNodes;
     }
   }
 
   // Handle edge changes (from @xyflow/svelte)
   function onEdgesChange(changes: any) {
-    // Update edges when changed
-    // @xyflow/svelte handles this internally
+    saveHistory();
+    
+    // Apply changes to edges array
+    // SvelteFlow provides changes like: { type: 'add', item: {...} } or { type: 'remove', id: '...' }
+    let edgesUpdated = false;
+    let newEdges = [...edges];
+    
+    for (const change of changes) {
+      if (change.type === 'add') {
+        // New edge added - apply styling
+        const edge = change.item;
+        const sourceNode = nodes.find(n => n.id === edge.source);
+        const edgeColor = sourceNode ? getNodeColor(sourceNode.data?.nodeType || sourceNode.type) : '#666';
+        
+        // Create styled edge with dynamic style
+        const tempEdge: Edge = {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+          type: 'straight',
+          style: {},
+          data: {},
+        };
+        const styledEdge: Edge = {
+          ...tempEdge,
+          type: 'straight', // Vertical connection (down) - straight line
+          style: getEdgeStyle(tempEdge), // Use dynamic style (gray/dotted during drag)
+          data: {
+            sourceHandle: edge.sourceHandle,
+            targetHandle: edge.targetHandle,
+          },
+        };
+        
+        // Add to edges array if not already present
+        if (!newEdges.find(e => e.id === styledEdge.id)) {
+          newEdges.push(styledEdge);
+          edgesUpdated = true;
+          console.log('WorkflowCanvas: Edge added via onEdgesChange', styledEdge);
+        }
+      } else if (change.type === 'remove') {
+        // Edge removed
+        newEdges = newEdges.filter(e => e.id !== change.id);
+        edgesUpdated = true;
+        console.log('WorkflowCanvas: Edge removed', change.id);
+      } else if (change.type === 'select') {
+        // Edge selection changed (optional)
+      } else if (change.type === 'reset') {
+        // All edges reset
+        newEdges = changes.map((c: any) => c.item).filter(Boolean);
+        edgesUpdated = true;
+      }
+    }
+    
+    // Update edges state if changed
+    if (edgesUpdated) {
+      edges = newEdges;
+    }
+  }
+  
+  // Get edge style based on state (gray/dotted during drag, normal otherwise)
+  function getEdgeStyle(edge: Edge): any {
+    const sourceNode = nodes.find(n => n.id === edge.source);
+    const edgeColor = sourceNode ? getNodeColor(sourceNode.data?.nodeType || sourceNode.type) : '#666';
+    
+    // If source node is being dragged, make edge gray and dotted
+    if (draggedNodeId === edge.source) {
+      return {
+        stroke: '#888',
+        strokeWidth: 2,
+        strokeDasharray: '5,5', // Dotted line
+        opacity: 0.6,
+      };
+    }
+    
+    // Normal style
+    return {
+      stroke: edgeColor,
+      strokeWidth: 2,
+      opacity: 1,
+    };
+  }
+  
+  // Check if node has lost input (downstream warning)
+  function hasLostInput(nodeId: string): boolean {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return false;
+    
+    // Check if node has input connection points
+    const hasInputs = node.data?.connectionPoints?.some((p: ConnectionPoint) => p.type === 'input');
+    if (!hasInputs) return false;
+    
+    // Check if any edges connect to this node
+    const hasIncomingEdges = edges.some(e => e.target === nodeId);
+    
+    // If node expects inputs but has none, it's lost (unless it's a start node)
+    return hasInputs && !hasIncomingEdges && node.data?.nodeType !== 'start';
+  }
+  
+  // Get midpoint of edge for X button positioning
+  function getEdgeMidPoint(edge: Edge): { x: number; y: number } {
+    const sourceNode = nodes.find(n => n.id === edge.source);
+    const targetNode = nodes.find(n => n.id === edge.target);
+    
+    if (!sourceNode || !targetNode) {
+      return { x: 0, y: 0 };
+    }
+    
+    // Calculate midpoint between source and target nodes
+    const sourceX = sourceNode.position.x + NODE_WIDTH;
+    const sourceY = sourceNode.position.y + NODE_HEIGHT / 2;
+    const targetX = targetNode.position.x;
+    const targetY = targetNode.position.y + NODE_HEIGHT / 2;
+    
+    return {
+      x: (sourceX + targetX) / 2,
+      y: (sourceY + targetY) / 2,
+    };
   }
 
   // Handle node connect (when edge is created)
   function onConnect(connection: any) {
+    console.log('WorkflowCanvas: onConnect called', connection);
     saveHistory();
     
-    // Get source and target nodes to match edge color and validate connection types
+    // Get source and target nodes to validate
     const sourceNode = nodes.find(n => n.id === connection.source);
     const targetNode = nodes.find(n => n.id === connection.target);
+    
+    if (!sourceNode || !targetNode) {
+      console.warn('WorkflowCanvas: Source or target node not found');
+      invalidConnectionSource = null;
+      return; // Prevent connection by not returning connection object
+    }
+    
+    // Validate vertical connection (target must be below source) - Connections only vertical (down) by default
+    // Source handle should be Bottom (output), target handle should be Top (input)
+    const sourceY = sourceNode.position.y;
+    const targetY = targetNode.position.y;
+    if (targetY <= sourceY) {
+      console.warn('WorkflowCanvas: Connection must be vertical (down) - target must be below source');
+      invalidConnectionSource = connection.source;
+      setTimeout(() => { invalidConnectionSource = null; }, 1000); // Clear after 1 second
+      return; // Prevent connection - no glow if invalid
+    }
+    
+    // Validate handle positions match vertical flow (source: Bottom, target: Top)
+    const sourcePoint = sourceNode?.data?.connectionPoints?.find(
+      (p: ConnectionPoint) => p.id === connection.sourceHandle
+    );
+    const targetPoint = targetNode?.data?.connectionPoints?.find(
+      (p: ConnectionPoint) => p.id === connection.targetHandle
+    );
+    
+    if (sourcePoint && sourcePoint.position !== Position.Bottom) {
+      console.warn('WorkflowCanvas: Source handle must be at Bottom for vertical flow');
+      invalidConnectionSource = connection.source;
+      setTimeout(() => { invalidConnectionSource = null; }, 1000);
+      return;
+    }
+    
+    if (targetPoint && targetPoint.position !== Position.Top) {
+      console.warn('WorkflowCanvas: Target handle must be at Top for vertical flow');
+      invalidConnectionSource = connection.source;
+      setTimeout(() => { invalidConnectionSource = null; }, 1000);
+      return;
+    }
     
     // Validate connection types if both nodes have connection points defined
     if (sourceNode?.data?.connectionPoints && targetNode?.data?.connectionPoints) {
@@ -725,32 +1232,104 @@
         // Allow connection if types match or either is 'any'
         if (sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType) {
           console.warn(`Connection type mismatch: ${sourceType} -> ${targetType}`);
-          return; // Don't create edge if types don't match
+          invalidConnectionSource = connection.source;
+          setTimeout(() => { invalidConnectionSource = null; }, 1000);
+          return; // Prevent invalid connection - no glow
         }
       }
     }
     
-    const edgeColor = sourceNode ? getNodeColor(sourceNode.data?.nodeType || sourceNode.type) : '#666';
+    // Clear invalid connection state
+    invalidConnectionSource = null;
     
-    // Add new edge with bezier curve style (no arrows, color matches source)
+    // Create edge immediately with proper styling (vertical connection)
+    const edgeColor = getNodeColor(sourceNode.data?.nodeType || sourceNode.type);
+    
     const newEdge: Edge = {
-      id: `edge-${Date.now()}-${connection.source}-${connection.target}`,
+      id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
       source: connection.source,
       target: connection.target,
-      sourceHandle: connection.sourceHandle, // Store handle IDs for connection point tracking
+      sourceHandle: connection.sourceHandle,
       targetHandle: connection.targetHandle,
-      type: 'smoothstep', // Bezier curve type
+      type: 'straight', // Vertical connection (down) - straight line
       style: {
         stroke: edgeColor,
         strokeWidth: 2,
       },
-      // Store connection metadata for future editing
       data: {
         sourceHandle: connection.sourceHandle,
         targetHandle: connection.targetHandle,
       },
     };
+    
+    // Add edge to array
     edges = [...edges, newEdge];
+    console.log('WorkflowCanvas: Edge created', newEdge);
+    
+    // Return connection to allow SvelteFlow to also track it
+    return connection;
+  }
+  
+  // Handle node drag start
+  function onNodeDragStart(event: any) {
+    const nodeId = event.node?.id;
+    if (nodeId) {
+      draggedNodeId = nodeId;
+      console.log('WorkflowCanvas: Node drag started', nodeId);
+    }
+  }
+  
+  // Handle node drag
+  function onNodeDrag(event: any) {
+    // Update node position during drag (handled by onNodesChange)
+    // Wires will be updated to gray/dotted state via getEdgeStyle
+  }
+  
+  // Handle node drag stop
+  function onNodeDragStop(event: any) {
+    const nodeId = event.node?.id;
+    if (nodeId) {
+      const droppedNode = event.node;
+      
+      // Check if node was dropped on another node (prevent merge/replace - keep it Lego)
+      const overlappingNode = nodes.find(n => {
+        if (n.id === droppedNode.id) return false;
+        const distance = Math.sqrt(
+          Math.pow(n.position.x - droppedNode.position.x, 2) +
+          Math.pow(n.position.y - droppedNode.position.y, 2)
+        );
+        return distance < NODE_WIDTH; // If nodes are too close, prevent drop
+      });
+      
+      if (overlappingNode) {
+        // Prevent drop on another node - snap away
+        const snappedPos = snapToGrid(droppedNode.position);
+        const safePosition = findBestRow(snappedPos);
+        
+        const nodeIndex = nodes.findIndex(n => n.id === nodeId);
+        if (nodeIndex !== -1) {
+          nodes[nodeIndex] = {
+            ...nodes[nodeIndex],
+            position: safePosition,
+          };
+          nodes = [...nodes];
+        }
+        
+        alert('Cannot drop node on another node. Node repositioned.');
+      }
+      
+      draggedNodeId = null;
+      console.log('WorkflowCanvas: Node drag stopped', nodeId);
+      // Wires will auto-reroute (edges will be updated by onEdgesChange)
+    }
+  }
+  
+  // Delete edge on hover (X button)
+  function deleteEdge(edgeId: string) {
+    saveHistory();
+    edges = edges.filter(e => e.id !== edgeId);
+    hoveredEdgeId = null;
+    console.log('WorkflowCanvas: Edge deleted', edgeId);
   }
 
   // Add node to canvas
@@ -768,13 +1347,8 @@
     
     saveHistory();
     
-    // Ensure position is already snapped to grid (it should be from handleDrop)
-    // But double-check and use findBestRow to avoid overlaps
-    const snappedPos = snapToGrid(position);
-    const finalPosition = findBestRow(snappedPos);
-    
-    // Ensure final position is also snapped (findBestRow should already do this, but be safe)
-    const finalSnappedPosition = snapToGrid(finalPosition);
+    // Use findBestRow to find the best position (avoids overlaps, places after existing nodes)
+    const finalPosition = findBestRow(position);
     
     // Get connection points for this node type
     const connectionPoints = getDefaultConnectionPoints(type);
@@ -783,7 +1357,7 @@
     const newNode: Node = {
       id: generateUUID(),
       type: 'default', // All nodes use default type (styling via CSS)
-      position: finalSnappedPosition,
+      position: finalPosition, // findBestRow already snaps to grid
       data: { 
         label: type === 'start' ? 'Start' : type === 'results' ? 'Results' : type === 'output' ? 'Output' : type.replace('model-', '').replace(/-/g, ' '),
         nodeType: type, // Store original type in data for CSS styling
@@ -792,7 +1366,8 @@
       },
     };
     console.log('WorkflowCanvas: Adding new node:', newNode);
-    console.log('WorkflowCanvas: Final snapped position:', finalSnappedPosition);
+    console.log('WorkflowCanvas: Final position:', finalPosition);
+    console.log('WorkflowCanvas: Existing nodes:', nodes.map(n => ({ id: n.id, pos: n.position })));
     nodes = [...nodes, newNode];
     console.log('WorkflowCanvas: Total nodes after add:', nodes.length);
   }
@@ -917,20 +1492,42 @@
     
     <button 
       onclick={runWorkflow}
+      disabled={isExecuting}
       style="
         padding: 8px 16px;
-        background: #28a745;
+        background: {isExecuting ? '#6c757d' : '#28a745'};
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: {isExecuting ? 'not-allowed' : 'pointer'};
+        font-size: 14px;
+        transition: background 0.2s;
+      "
+      onmouseenter={(e) => { if (!isExecuting) e.currentTarget.style.background = '#218838'; }}
+      onmouseleave={(e) => { if (!isExecuting) e.currentTarget.style.background = '#28a745'; }}
+    >
+      {isExecuting ? 'Running...' : 'Run (Ctrl+Enter)'}
+    </button>
+    
+    {#if isExecuting && executionRunId}
+      <div style="padding: 8px 16px; background: #17a2b8; color: white; border-radius: 4px; font-size: 14px;">
+        Run ID: {executionRunId}
+      </div>
+    {/if}
+    
+    <button 
+      onclick={() => showExecutionTrace = !showExecutionTrace}
+      style="
+        padding: 8px 16px;
+        background: #6c757d;
         color: white;
         border: none;
         border-radius: 4px;
         cursor: pointer;
         font-size: 14px;
-        transition: background 0.2s;
       "
-      onmouseenter={(e) => e.currentTarget.style.background = '#218838'}
-      onmouseleave={(e) => e.currentTarget.style.background = '#28a745'}
     >
-      Run (Ctrl+Enter)
+      {showExecutionTrace ? 'Hide' : 'Show'} Trace
     </button>
     
     <div style="flex: 1;"></div>
@@ -1016,11 +1613,13 @@
 
       <!-- Zoom Slider (between buttons) -->
       <div style="
+        width: 28px;
         height: 80px;
         display: flex;
         align-items: center;
         justify-content: center;
         margin: 2px 0;
+        position: relative;
       ">
         <input
           type="range"
@@ -1106,21 +1705,55 @@
       bind:this={svelteFlowInstance}
       nodes={nodes.map(n => ({
         ...n,
-        className: executionPath.includes(n.id) ? 'executing' : '',
+        className: [
+          executionPath.includes(n.id) ? 'executing' : '',
+          hasLostInput(n.id) ? 'lost-input' : '',
+          invalidConnectionSource === n.id ? 'invalid-connection' : '',
+        ].filter(Boolean).join(' '),
         draggable: true,
+        data: {
+          ...n.data,
+          executionStatus: nodeExecutionStatus.get(n.id) || 'pending',
+          hasLostInput: hasLostInput(n.id),
+        },
       }))}
-      {edges}
+      edges={edges.map(e => ({
+        ...e,
+        // Ensure edge has required properties with dynamic styling
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        type: e.type || 'straight',
+        style: getEdgeStyle(e), // Dynamic style (gray/dotted during drag)
+        data: e.data || {},
+        className: hoveredEdgeId === e.id ? 'edge-hover' : '',
+      }))}
       on:nodeschange={onNodesChange}
       on:edgeschange={onEdgesChange}
       on:connect={onConnect}
+      on:nodedragstart={onNodeDragStart}
+      on:nodedrag={onNodeDrag}
+      on:nodedragstop={onNodeDragStop}
       on:viewportchange={onViewportChange}
+      on:edgeenter={(event: any) => {
+        if (draggedNodeId === event.edge.source) {
+          hoveredEdgeId = event.edge.id;
+        }
+      }}
+      on:edgeleave={() => {
+        hoveredEdgeId = null;
+      }}
       {nodeTypes}
       {edgeTypes}
       nodesDraggable={true}
       nodesConnectable={true}
+      edgesUpdatable={true}
+      edgesFocusable={true}
       snapToGrid={true}
       snapGrid={[GRID_SIZE, GRID_SIZE]}
-      panOnDrag={[1, 2]}
+      panOnDrag={[2]}
       panOnScroll={true}
       zoomOnScroll={true}
       zoomOnPinch={true}
@@ -1128,7 +1761,10 @@
       maxZoom={2}
       viewport={viewportProp}
       connectionMode="loose"
-      connectionRadius={20}
+      connectionRadius={30}
+      connectionLineStyle={{ strokeWidth: 2 }}
+      selectNodesOnDrag={false}
+      elementsSelectable={true}
       style="width: 100%; height: 100%;"
     >
       <Background 
@@ -1147,6 +1783,72 @@
         />
       {/if}
     </SvelteFlow>
+    
+    <!-- Edge Delete Button (X) on Hover (only when dragging source node) -->
+    {#each edges as edge}
+      {#if hoveredEdgeId === edge.id && draggedNodeId === edge.source}
+        {@const midPoint = getEdgeMidPoint(edge)}
+        <div
+          style="
+            position: absolute;
+            left: {midPoint.x}px;
+            top: {midPoint.y}px;
+            transform: translate(-50%, -50%);
+            z-index: 10000;
+            background: #dc3545;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+            border: 2px solid white;
+            transition: transform 0.2s;
+          "
+          onclick={() => deleteEdge(edge.id)}
+          onmouseenter={(e) => e.currentTarget.style.transform = 'translate(-50%, -50%) scale(1.2)'}
+          onmouseleave={(e) => e.currentTarget.style.transform = 'translate(-50%, -50%) scale(1)'}
+          title="Delete connection"
+        >
+          ×
+        </div>
+      {/if}
+    {/each}
+    
+    <!-- Tooltip for nodes with lost input -->
+    {#each nodes as node}
+      {#if hasLostInput(node.id)}
+        {@const flowX = node.position.x + NODE_WIDTH / 2}
+        {@const flowY = node.position.y - 30}
+        {@const scaledFontSize = Math.max(10, 12 * viewport.zoom)}
+        {@const scaledPadding = `${6 * viewport.zoom}px ${12 * viewport.zoom}px`}
+        <div
+          style="
+            position: absolute;
+            left: 0;
+            top: 0;
+            transform: translate({flowX * viewport.zoom + viewport.x}px, {flowY * viewport.zoom + viewport.y}px) translateX(-50%);
+            transform-origin: 0 0;
+            z-index: 10000;
+            background: #ff9800;
+            color: white;
+            padding: {scaledPadding};
+            border-radius: {4 * viewport.zoom}px;
+            font-size: {scaledFontSize}px;
+            white-space: nowrap;
+            box-shadow: 0 {2 * viewport.zoom}px {8 * viewport.zoom}px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+          "
+        >
+          Input lost. Reconnect or delete branch.
+        </div>
+      {/if}
+    {/each}
     
     <!-- Fallback drop zone overlay (in case Background doesn't catch it) -->
     <div
@@ -1186,6 +1888,119 @@
         return false;
       }}
     ></div>
+    
+    <!-- Execution Trace Panel -->
+    {#if showExecutionTrace}
+      <div style="
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        width: 400px;
+        max-height: 300px;
+        background: #1a1a1f;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 15px;
+        z-index: 1000;
+        overflow-y: auto;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      ">
+        <div style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 10px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid #333;
+        ">
+          <h3 style="margin: 0; color: white; font-size: 16px;">Execution Trace</h3>
+          <button
+            onclick={() => showExecutionTrace = false}
+            style="
+              background: transparent;
+              border: none;
+              color: white;
+              cursor: pointer;
+              font-size: 18px;
+              padding: 0;
+              width: 24px;
+              height: 24px;
+            "
+          >
+            ×
+          </button>
+        </div>
+        
+        {#if executionTrace.length === 0}
+          <div style="color: #888; font-size: 14px; text-align: center; padding: 20px;">
+            No execution trace yet. Run the workflow to see trace.
+          </div>
+        {:else}
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            {#each executionTrace as entry}
+              <div style="
+                padding: 8px;
+                background: {
+                  entry.status === 'completed' ? 'rgba(40, 167, 69, 0.2)' :
+                  entry.status === 'failed' ? 'rgba(220, 53, 69, 0.2)' :
+                  entry.status === 'running' ? 'rgba(0, 123, 255, 0.2)' :
+                  'rgba(108, 117, 125, 0.2)'
+                };
+                border-left: 3px solid {
+                  entry.status === 'completed' ? '#28a745' :
+                  entry.status === 'failed' ? '#dc3545' :
+                  entry.status === 'running' ? '#007bff' :
+                  '#6c757d'
+                };
+                border-radius: 4px;
+              ">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                  <div style="flex: 1;">
+                    <div style="color: white; font-weight: bold; font-size: 13px;">
+                      {entry.nodeId}
+                    </div>
+                    <div style="color: #aaa; font-size: 11px; margin-top: 4px;">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </div>
+                    {#if entry.tokens !== undefined}
+                      <div style="color: #888; font-size: 11px; margin-top: 2px;">
+                        Tokens: {entry.tokens}
+                      </div>
+                    {/if}
+                    {#if entry.latency !== undefined}
+                      <div style="color: #888; font-size: 11px; margin-top: 2px;">
+                        Latency: {entry.latency.toFixed(2)}ms
+                      </div>
+                    {/if}
+                    {#if entry.error}
+                      <div style="color: #dc3545; font-size: 12px; margin-top: 4px;">
+                        Error: {entry.error}
+                      </div>
+                    {/if}
+                  </div>
+                  <div style="
+                    padding: 4px 8px;
+                    background: {
+                      entry.status === 'completed' ? '#28a745' :
+                      entry.status === 'failed' ? '#dc3545' :
+                      entry.status === 'running' ? '#007bff' :
+                      '#6c757d'
+                    };
+                    color: white;
+                    border-radius: 3px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    text-transform: uppercase;
+                  ">
+                    {entry.status}
+                  </div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -1418,6 +2233,18 @@
     border-color: #28a745;
   }
   
+  /* Lost input warning (orange) */
+  :global(.svelte-flow__node.lost-input) {
+    box-shadow: 0 0 15px rgba(255, 152, 0, 0.6);
+    border-color: #ff9800;
+    border-width: 3px;
+  }
+  
+  /* Invalid connection attempt (no glow, just visual feedback) */
+  :global(.svelte-flow__node.invalid-connection) {
+    opacity: 0.7;
+  }
+  
   :global(.svelte-flow__node:hover) {
     box-shadow: 0 0 10px rgba(0, 123, 255, 0.3);
     transform: scale(1.05);
@@ -1427,9 +2254,15 @@
   /* Bezier edges, no arrows, colors match source node */
   :global(.svelte-flow__edge) {
     stroke-width: 2;
+    transition: stroke-dasharray 0.2s, opacity 0.2s, stroke-width 0.2s;
   }
   
   :global(.svelte-flow__edge:hover) {
+    stroke-width: 3;
+  }
+  
+  /* Edge hover state for delete button */
+  :global(.svelte-flow__edge.edge-hover) {
     stroke-width: 3;
   }
   
@@ -1440,16 +2273,16 @@
 
   /* Zoom Slider Styling (vertical, compact size) */
   .zoom-slider-vertical {
-    width: 28px;
-    height: 80px;
-    -webkit-appearance: slider-vertical;
-    writing-mode: bt-lr;
+    width: 80px;
+    height: 28px;
     appearance: none;
     background: transparent;
     border-radius: 0;
     outline: none;
     cursor: pointer;
     margin: 0;
+    transform: rotate(-90deg);
+    transform-origin: center;
   }
 
   .zoom-slider-vertical::-webkit-slider-thumb {
@@ -1462,7 +2295,7 @@
     border-radius: 50%;
     cursor: pointer;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    margin-left: -5px;
+    margin-top: -3px;
   }
 
   .zoom-slider-vertical::-moz-range-thumb {
@@ -1473,17 +2306,18 @@
     border-radius: 50%;
     cursor: pointer;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    border: none;
   }
 
   .zoom-slider-vertical::-webkit-slider-runnable-track {
-    width: 28px;
+    width: 100%;
     height: 4px;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
   }
 
   .zoom-slider-vertical::-moz-range-track {
-    width: 28px;
+    width: 100%;
     height: 4px;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;

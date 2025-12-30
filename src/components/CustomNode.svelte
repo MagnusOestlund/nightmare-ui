@@ -25,78 +25,96 @@
     nodeType: string;
     color: string;
     connectionPoints?: ConnectionPoint[];
+    executionStatus?: 'pending' | 'running' | 'completed' | 'failed';
   }
 
   let { data }: { data: NodeData } = $props();
+  
+  // Get status color
+  function getStatusColor(status?: string): string {
+    switch (status) {
+      case 'running': return '#007bff';
+      case 'completed': return '#28a745';
+      case 'failed': return '#dc3545';
+      default: return 'transparent';
+    }
+  }
+  
+  // Get status border style
+  function getStatusBorder(status?: string): string {
+    if (!status || status === 'pending') return 'none';
+    return `3px solid ${getStatusColor(status)}`;
+  }
 
   // Default connection points based on node type
+  // Connections are vertical (down) by default - Top (output) to Bottom (input)
   function getDefaultConnectionPoints(nodeType: string): ConnectionPoint[] {
     const points: ConnectionPoint[] = [];
     
     switch (nodeType) {
       case 'start':
-        // Start node: only output (right side)
+        // Start node: only output (bottom side)
         points.push({
           id: 'output-1',
           type: 'output',
           connectionType: 'execution',
           label: 'Out',
-          position: Position.Right,
+          position: Position.Bottom,
         });
         break;
         
       case 'branch':
-        // Branch node: one input (left), two outputs (right - true/false)
+        // Branch node: one input (top), two outputs (bottom - true/false)
         points.push({
           id: 'input-1',
           type: 'input',
           connectionType: 'execution',
           label: 'In',
-          position: Position.Left,
+          position: Position.Top,
         });
         points.push({
           id: 'output-true',
           type: 'output',
           connectionType: 'execution',
           label: 'True',
-          position: Position.Right,
+          position: Position.Bottom,
         });
         points.push({
           id: 'output-false',
           type: 'output',
           connectionType: 'execution',
           label: 'False',
-          position: Position.Right,
+          position: Position.Bottom,
         });
         break;
         
       case 'results':
       case 'output':
-        // Results/Output nodes: only input (left side)
+        // Results/Output nodes: only input (top side)
         points.push({
           id: 'input-1',
           type: 'input',
           connectionType: 'execution',
           label: 'In',
-          position: Position.Left,
+          position: Position.Top,
         });
         break;
         
       default:
-        // Default: one input (left), one output (right)
+        // Default: one input (top), one output (bottom) - vertical flow
         points.push({
           id: 'input-1',
           type: 'input',
           connectionType: 'execution',
           label: 'In',
-          position: Position.Left,
+          position: Position.Top,
         });
         points.push({
           id: 'output-1',
           type: 'output',
           connectionType: 'execution',
           label: 'Out',
-          position: Position.Right,
+          position: Position.Bottom,
         });
         break;
     }
@@ -131,7 +149,7 @@
   data-node-type={data.nodeType}
   style="
     background: {data.color};
-    border: 2px solid {data.color};
+    border: {getStatusBorder(data.executionStatus)};
     border-radius: 8px;
     padding: 12px;
     min-width: 120px;
@@ -142,8 +160,23 @@
     justify-content: center;
     position: relative;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    {data.executionStatus === 'running' ? 'animation: pulse 1.5s ease-in-out infinite;' : ''}
   "
 >
+  <!-- Execution Status Indicator -->
+  {#if data.executionStatus && data.executionStatus !== 'pending'}
+    <div style="
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 12px;
+      height: 12px;
+      background: {getStatusColor(data.executionStatus)};
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+    "></div>
+  {/if}
   <!-- Node Label -->
   <div style="
     color: white;
@@ -164,6 +197,7 @@
     right: 0;
     bottom: 0;
     pointer-events: none;
+    z-index: 10;
   ">
     <!-- Left Side (Inputs) - Centered vertically -->
     {#each leftPoints as point, idx}
@@ -178,6 +212,7 @@
         display: flex;
         align-items: center;
         gap: 4px;
+        z-index: 1000;
       ">
         {#if point.label}
           <span style="
@@ -196,12 +231,14 @@
           position={Position.Left}
           id={point.id}
           style="
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             background: {getConnectionTypeColor(point.connectionType)};
             border: 2px solid white;
             border-radius: 50%;
             box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+            cursor: crosshair;
+            z-index: 20;
           "
         />
       </div>
@@ -221,6 +258,7 @@
         align-items: center;
         gap: 4px;
         flex-direction: row-reverse;
+        z-index: 1000;
       ">
         {#if point.label}
           <span style="
@@ -239,12 +277,14 @@
           position={Position.Right}
           id={point.id}
           style="
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             background: {getConnectionTypeColor(point.connectionType)};
             border: 2px solid white;
             border-radius: 50%;
             box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+            cursor: crosshair;
+            z-index: 20;
           "
         />
       </div>
@@ -340,12 +380,21 @@
 
 <style>
   :global(.custom-node) {
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
   }
   
   :global(.custom-node:hover) {
     transform: scale(1.05);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+  
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
 </style>
 
